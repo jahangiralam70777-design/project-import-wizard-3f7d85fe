@@ -1,0 +1,30 @@
+-- ROOT-CAUSE FIX for "permission denied for function is_routine_admin"
+--
+-- Apply this manually in the Supabase SQL editor.
+--
+-- Why this happened:
+--   Migration 20260712153321 revoked EXECUTE on public.is_routine_admin(uuid)
+--   from the `authenticated` role. However, every RLS policy on the routine
+--   tables (routines, routine_targets, routine_active_days, routine_scopes,
+--   routine_study_sessions, routine_audit_log, and the routine_notifications
+--   tables from the 20260713 manual_apply) calls
+--   public.is_routine_admin(auth.uid()) in USING / WITH CHECK.
+--
+--   PostgreSQL evaluates policy expressions as the CALLING role. Even though
+--   is_routine_admin is SECURITY DEFINER, the caller (`authenticated`) must
+--   still hold EXECUTE on the function or the policy evaluation itself fails
+--   with: permission denied for function is_routine_admin.
+--
+--   Net effect: admins could not INSERT/UPDATE routines from the app, because
+--   the RLS check errored out before the SECURITY DEFINER body could run.
+--
+-- Why the fix is safe:
+--   * public.is_routine_admin is SECURITY DEFINER with SET search_path = public
+--   * It only returns a boolean derived from public.has_role(...)
+--   * It does not read/write any table that the caller couldn't already query
+--     through the existing has_role() infrastructure
+--   * Restores the grant that migration 20260712153230 originally created
+--
+-- Idempotent: GRANT is a no-op when already in place.
+
+GRANT EXECUTE ON FUNCTION public.is_routine_admin(uuid) TO authenticated;

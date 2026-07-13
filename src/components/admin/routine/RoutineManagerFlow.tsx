@@ -9,6 +9,7 @@ import {
   Pencil,
   Copy,
   Archive,
+  ArchiveRestore,
   ToggleLeft,
   ToggleRight,
   Trash2,
@@ -23,6 +24,9 @@ import {
   ListChecks,
   ShieldCheck,
   Target,
+  History,
+  Download,
+  UsersRound,
 } from "lucide-react";
 import { AdminPageHeader } from "@/components/ui/admin-page-header";
 import { Button } from "@/components/ui/button";
@@ -41,6 +45,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Dialog,
   DialogContent,
@@ -56,9 +61,14 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
 import { Bell } from "lucide-react";
 import { RoutineNotificationSettings } from "./RoutineNotificationSettings";
+import { StudentPicker } from "./StudentPicker";
+import { EditRoutineDialog } from "./EditRoutineDialog";
+import { RoutineHistoryDialog } from "./RoutineHistoryDialog";
+import { AssignedStudentsDialog } from "./AssignedStudentsDialog";
 import {
   useAcademicLevels,
   useAcademicSubjects,
@@ -71,6 +81,12 @@ import {
   updateManualReviewSettings,
   adminCreateRoutine,
   adminListRoutines,
+  adminEnableRoutine,
+  adminDisableRoutine,
+  adminArchiveRoutine,
+  adminRestoreRoutine,
+  adminDeleteRoutine,
+  adminDuplicateRoutine,
 } from "@/lib/admin-routine.functions";
 import { toast } from "sonner";
 
@@ -186,6 +202,11 @@ function CreateRoutineDialog({
   const [enabled, setEnabled] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
+  const [assignmentMode, setAssignmentMode] = useState<"all_students" | "selected_students">(
+    "all_students",
+  );
+  const [studentIds, setStudentIds] = useState<string[]>([]);
+
   const { data: levels = [], isLoading: levelsLoading } = useAcademicLevels();
   const { data: subjects = [], isLoading: subjectsLoading } = useAcademicSubjects(level || null);
   const { data: chapters = [], isLoading: chaptersLoading } = useAcademicChapters(subject || null);
@@ -194,8 +215,8 @@ function CreateRoutineDialog({
 
   const nameError = name.length > 0 && name.trim().length < 3;
   const canSubmit =
-    name.trim().length >= 3 && level.length > 0 && days.length > 0 && !submitting;
-
+    name.trim().length >= 3 && level.length > 0 && days.length > 0 && !submitting &&
+    (assignmentMode === "all_students" || studentIds.length > 0);
 
   function toggleDay(k: string) {
     setDays((d) => (d.includes(k) ? d.filter((x) => x !== k) : [...d, k]));
@@ -214,6 +235,8 @@ function CreateRoutineDialog({
     setDays([]);
     setMandatory(true);
     setEnabled(true);
+    setAssignmentMode("all_students");
+    setStudentIds([]);
   }
 
   return (
@@ -499,6 +522,40 @@ function CreateRoutineDialog({
               </div>
             </div>
           </section>
+
+          {/* Assignment */}
+          <section className="space-y-3">
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+              Student Assignment
+            </h3>
+            <RadioGroup
+              value={assignmentMode}
+              onValueChange={(v) => setAssignmentMode(v as "all_students" | "selected_students")}
+              className="grid gap-2 sm:grid-cols-2"
+            >
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border/60 p-3 hover:bg-muted/40">
+                <RadioGroupItem value="all_students" />
+                <div>
+                  <p className="text-sm font-medium">All Students</p>
+                  <p className="text-xs text-muted-foreground">Every student matching scope.</p>
+                </div>
+              </label>
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border/60 p-3 hover:bg-muted/40">
+                <RadioGroupItem value="selected_students" />
+                <div>
+                  <p className="text-sm font-medium">Selected Students</p>
+                  <p className="text-xs text-muted-foreground">Only students you pick.</p>
+                </div>
+              </label>
+            </RadioGroup>
+            {assignmentMode === "selected_students" && (
+              <StudentPicker
+                value={studentIds}
+                onChange={setStudentIds}
+                levelFilter={level || undefined}
+              />
+            )}
+          </section>
         </div>
 
         <DialogFooter className="mt-4">
@@ -525,6 +582,9 @@ function CreateRoutineDialog({
                     endDate: endDate || null,
                     activeDays: days as any,
                     targets: { studyMinutes, mcqCount },
+                    assignmentMode,
+                    selectedStudentIds:
+                      assignmentMode === "selected_students" ? studentIds : [],
                   },
                 });
                 if ((res as any)?.fallback) {
@@ -650,6 +710,9 @@ export function RoutineManagerFlow() {
   const [tab, setTab] = useState<"list" | "review" | "notifications">("list");
   const [createOpen, setCreateOpen] = useState(false);
   const [details, setDetails] = useState<RoutineRow | null>(null);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [historyId, setHistoryId] = useState<string | null>(null);
+  const [assignedTarget, setAssignedTarget] = useState<RoutineRow | null>(null);
   const [search, setSearch] = useState("");
   const [filterLevel, setFilterLevel] = useState("all");
   const [filterSubject, setFilterSubject] = useState("all");
@@ -666,7 +729,33 @@ export function RoutineManagerFlow() {
   );
 
   const listFn = useServerFn(adminListRoutines);
+  const enableFn = useServerFn(adminEnableRoutine);
+  const disableFn = useServerFn(adminDisableRoutine);
+  const archiveFn = useServerFn(adminArchiveRoutine);
+  const restoreFn = useServerFn(adminRestoreRoutine);
+  const deleteFn = useServerFn(adminDeleteRoutine);
+  const duplicateFn = useServerFn(adminDuplicateRoutine);
   const queryClient = useQueryClient();
+  const invalidateList = () => queryClient.invalidateQueries({ queryKey: ["admin-routines"] });
+  const runAction = async (label: string, fn: () => Promise<unknown>) => {
+    try {
+      await fn();
+      toast.success(`${label} succeeded.`);
+      invalidateList();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : `${label} failed`);
+    }
+  };
+  const exportCsv = (rows: RoutineRow[]) => {
+    const header = ["id","name","level","subject","chapter","studyHours","mcqTarget","activeDays","status","createdAt"];
+    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const body = rows.map((r) => [r.id, r.name, r.level, r.subject ?? "", r.chapter ?? "", r.studyTarget, r.mcqTarget, r.activeDays.join("|"), r.status, r.createdAt].map(esc).join(","));
+    const blob = new Blob([header.join(",") + "\n" + body.join("\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `routines-${new Date().toISOString().slice(0,10)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
   const listKey = useMemo(
     () => [
       "admin-routines",
@@ -759,6 +848,10 @@ export function RoutineManagerFlow() {
         ]}
         actions={
           <>
+            <Button variant="ghost" size="sm" onClick={() => exportCsv(routines)}>
+              <Download className="mr-1.5 h-4 w-4" />
+              Export CSV
+            </Button>
             <Button variant="secondary" size="sm" onClick={() => setTab("review")}>
               <ShieldCheck className="mr-1.5 h-4 w-4" />
               Review Submissions
@@ -974,14 +1067,28 @@ export function RoutineManagerFlow() {
                         <td className="px-4 py-3">
                           <div className="flex justify-end gap-1">
                             <RowAction icon={Eye} label="Preview" onClick={() => setDetails(r)} />
-                            <RowAction icon={Pencil} label="Edit" />
-                            <RowAction icon={Copy} label="Duplicate" />
+                            <RowAction icon={Pencil} label="Edit" onClick={() => setEditId(r.id)} />
+                            <RowAction icon={Copy} label="Duplicate" onClick={() => runAction("Duplicate", () => duplicateFn({ data: { id: r.id } }))} />
                             <RowAction
                               icon={r.status === "active" ? ToggleRight : ToggleLeft}
                               label={r.status === "active" ? "Disable" : "Enable"}
+                              onClick={() => runAction(r.status === "active" ? "Disable" : "Enable", () => (r.status === "active" ? disableFn({ data: { id: r.id } }) : enableFn({ data: { id: r.id } })))}
                             />
-                            <RowAction icon={Archive} label="Archive" />
-                            <RowAction icon={Trash2} label="Delete" destructive />
+                            <RowAction icon={UsersRound} label="Assigned Students" onClick={() => setAssignedTarget(r)} />
+                            <RowAction icon={History} label="History" onClick={() => setHistoryId(r.id)} />
+                            {r.status === "archived" ? (
+                              <RowAction icon={ArchiveRestore} label="Restore" onClick={() => runAction("Restore", () => restoreFn({ data: { id: r.id } }))} />
+                            ) : (
+                              <RowAction icon={Archive} label="Archive" onClick={() => runAction("Archive", () => archiveFn({ data: { id: r.id } }))} />
+                            )}
+                            <ConfirmDialog
+                              trigger={<button type="button" title="Delete" aria-label="Delete" className={cn("grid h-8 w-8 place-items-center rounded-lg border border-border/60 bg-background text-muted-foreground transition-colors hover:border-destructive/50 hover:bg-destructive/10 hover:text-destructive")}><Trash2 className="h-3.5 w-3.5" /></button>}
+                              title="Delete routine?"
+                              description={`This permanently deletes "${r.name}" and its assignments. This cannot be undone.`}
+                              confirmLabel="Delete"
+                              variant="destructive"
+                              onConfirm={() => runAction("Delete", () => deleteFn({ data: { id: r.id } }))}
+                            />
                           </div>
                         </td>
                       </tr>
@@ -1050,9 +1157,26 @@ export function RoutineManagerFlow() {
       <CreateRoutineDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onCreated={() => queryClient.invalidateQueries({ queryKey: ["admin-routines"] })}
+        onCreated={invalidateList}
       />
       <RoutineDetailsSheet routine={details} onOpenChange={(v) => !v && setDetails(null)} />
+      <EditRoutineDialog
+        routineId={editId}
+        open={!!editId}
+        onOpenChange={(v) => !v && setEditId(null)}
+        onSaved={invalidateList}
+      />
+      <RoutineHistoryDialog
+        routineId={historyId}
+        open={!!historyId}
+        onOpenChange={(v) => !v && setHistoryId(null)}
+      />
+      <AssignedStudentsDialog
+        routineId={assignedTarget?.id ?? null}
+        routineName={assignedTarget?.name ?? ""}
+        open={!!assignedTarget}
+        onOpenChange={(v) => !v && setAssignedTarget(null)}
+      />
     </div>
   );
 }

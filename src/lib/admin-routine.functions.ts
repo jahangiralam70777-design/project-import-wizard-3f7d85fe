@@ -26,6 +26,9 @@ import {
   reviewListSchema,
   routineCreateSchema,
   routineUpdateSchema,
+  setAssignmentsSchema,
+  listStudentsSchema,
+  listAssignmentsSchema,
   uuid,
   type PagedResult,
   type RoutineDTO,
@@ -52,6 +55,7 @@ function mapRoutine(row: any): RoutineDTO {
       mcqCount: row.mcq_target ?? 0,
     },
     status: row.status ?? "active",
+    assignmentMode: row.assignment_mode ?? "all_students",
     createdBy: row.created_by ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at ?? row.created_at,
@@ -212,7 +216,7 @@ export const adminCreateRoutine = createServerFn({ method: "POST" })
       subjectId: data.scope.subjectId ?? null,
       chapterId: data.scope.chapterId ?? null,
     });
-    const row = {
+    const row: Record<string, unknown> = {
       name: data.name,
       description: data.description ?? null,
       scope_level: data.scope.level,
@@ -224,6 +228,7 @@ export const adminCreateRoutine = createServerFn({ method: "POST" })
       study_target_minutes: data.targets.studyMinutes,
       mcq_target: data.targets.mcqCount,
       status: "active" as const,
+      assignment_mode: data.assignmentMode ?? "all_students",
       created_by: context.userId,
     };
     const { data: inserted, error } = await asAny(context.supabase)
@@ -235,6 +240,23 @@ export const adminCreateRoutine = createServerFn({ method: "POST" })
       if (isMissingTable(error)) return { ok: true, fallback: true, routine: null };
       throw new Error(error.message);
     }
+    // Persist explicit selections when in selected_students mode.
+    const routineId = inserted?.id as string | undefined;
+    const ids = Array.from(new Set(data.selectedStudentIds ?? []));
+    if (routineId && data.assignmentMode === "selected_students" && ids.length > 0) {
+      try {
+        await asAny(context.supabase).from("routine_assignments").insert(
+          ids.map((sid) => ({
+            routine_id: routineId,
+            student_id: sid,
+            assigned_by: context.userId,
+            status: "active",
+          })),
+        );
+      } catch (e) {
+        if (!isMissingTable(e)) throw e;
+      }
+    }
     await logActivity(
       context.supabase,
       context.userId,
@@ -242,13 +264,17 @@ export const adminCreateRoutine = createServerFn({ method: "POST" })
       "routine",
       inserted?.id ?? null,
       `Created routine '${data.name}'`,
-      { scope: data.scope },
+      { scope: data.scope, assignmentMode: data.assignmentMode, selectedCount: ids.length },
     );
-    const audience = await resolveAudience(context.supabase, {
-      level: data.scope.level,
-      subjectId: data.scope.subjectId ?? null,
-      chapterId: data.scope.chapterId ?? null,
-    });
+    // Notify: explicit selection uses ids directly; all_students uses scope match.
+    const audience =
+      data.assignmentMode === "selected_students"
+        ? ids
+        : await resolveAudience(context.supabase, {
+            level: data.scope.level,
+            subjectId: data.scope.subjectId ?? null,
+            chapterId: data.scope.chapterId ?? null,
+          });
     await enqueueNotifications(
       context.supabase,
       audience,
@@ -296,6 +322,8 @@ export const adminUpdateRoutine = createServerFn({ method: "POST" })
       patch.scope_subject_id = data.scope.subjectId ?? null;
       patch.scope_chapter_id = data.scope.chapterId ?? null;
     }
+    if (data.assignmentMode !== undefined) patch.assignment_mode = data.assignmentMode;
+
     const { error } = await asAny(context.supabase)
       .from("routines")
       .update(patch)
@@ -303,6 +331,31 @@ export const adminUpdateRoutine = createServerFn({ method: "POST" })
     if (error) {
       if (isMissingTable(error)) return { ok: true, fallback: true };
       throw new Error(error.message);
+    }
+    // If caller sent a new selected-student list, replace assignments for this routine.
+    if (
+      (data.assignmentMode === "selected_students" && Array.isArray(data.selectedStudentIds)) ||
+      (data.assignmentMode !== undefined && data.assignmentMode !== "selected_students")
+    ) {
+      try {
+        await asAny(context.supabase)
+          .from("routine_assignments")
+          .delete()
+          .eq("routine_id", data.id);
+        const ids = Array.from(new Set(data.selectedStudentIds ?? []));
+        if (data.assignmentMode === "selected_students" && ids.length > 0) {
+          await asAny(context.supabase).from("routine_assignments").insert(
+            ids.map((sid) => ({
+              routine_id: data.id,
+              student_id: sid,
+              assigned_by: context.userId,
+              status: "active",
+            })),
+          );
+        }
+      } catch (e) {
+        if (!isMissingTable(e)) throw e;
+      }
     }
     await logActivity(
       context.supabase,
@@ -364,7 +417,7 @@ export const adminRestoreRoutine = createServerFn({ method: "POST" })
   .validator(validate(z.object({ id: uuid })))
   .handler(async ({ context, data }) => {
     await assertPermission(context.supabase, context.userId, PERM, "routine.restore", { id: data.id });
-    return setRoutineStatus(context, data.id, "disabled", "routine.restored", "Restored routine");
+    return setRoutineStatus(context, data.id, "active", "routine.restored", "Restored routine");
   });
 
 export const adminDeleteRoutine = createServerFn({ method: "POST" })
@@ -738,4 +791,220 @@ export const updateManualReviewSettings = createServerFn({ method: "POST" })
       throw new Error(error.message);
     }
     return { ok: true, fallback: false as const };
+  });
+
+// ---------------- Student roster & assignment management ----------------
+
+/** Admin — searchable list of active students for the assignment picker. */
+export const adminListStudentsForAssignment = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator(validate(listStudentsSchema))
+  .handler(async ({ context, data }) => {
+    await assertPermission(context.supabase, context.userId, PERM, "routine.students.list");
+    const from = (data.page - 1) * data.pageSize;
+    const to = from + data.pageSize - 1;
+    let q = asAny(context.supabase)
+      .from("profiles")
+      .select("id,display_name,email,level", { count: "exact" })
+      .order("display_name", { ascending: true })
+      .range(from, to);
+    // Only non-deleted / non-banned when those columns exist.
+    q = q.is("deleted_at", null);
+    if (data.level) q = q.eq("level", data.level);
+    if (data.search) {
+      const s = `%${data.search}%`;
+      q = q.or(`display_name.ilike.${s},email.ilike.${s}`);
+    }
+    const { data: rows, error, count } = await q;
+    if (error) {
+      if (isMissingTable(error))
+        return { rows: [], count: 0, page: data.page, pageSize: data.pageSize, fallback: true };
+      throw new Error(error.message);
+    }
+    return {
+      rows: (rows ?? []).map((r: any) => ({
+        id: r.id as string,
+        displayName: (r.display_name as string | null) ?? null,
+        email: (r.email as string | null) ?? null,
+        level: (r.level as string | null) ?? null,
+      })),
+      count: count ?? 0,
+      page: data.page,
+      pageSize: data.pageSize,
+    };
+  });
+
+/** Admin — replace the assignment set for a routine. */
+export const adminSetRoutineAssignments = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator(validate(setAssignmentsSchema))
+  .handler(async ({ context, data }) => {
+    await assertPermission(context.supabase, context.userId, PERM, "routine.assignments.set", {
+      routineId: data.routineId,
+      mode: data.mode,
+      count: data.studentIds.length,
+    });
+    try {
+      await asAny(context.supabase)
+        .from("routines")
+        .update({ assignment_mode: data.mode, updated_at: new Date().toISOString() })
+        .eq("id", data.routineId);
+      await asAny(context.supabase)
+        .from("routine_assignments")
+        .delete()
+        .eq("routine_id", data.routineId);
+      const ids = Array.from(new Set(data.studentIds));
+      if (data.mode === "selected_students" && ids.length > 0) {
+        const { error } = await asAny(context.supabase).from("routine_assignments").insert(
+          ids.map((sid) => ({
+            routine_id: data.routineId,
+            student_id: sid,
+            assigned_by: context.userId,
+            status: "active",
+          })),
+        );
+        if (error) throw error;
+      }
+    } catch (e) {
+      if (isMissingTable(e)) return { ok: true, fallback: true };
+      throw new Error((e as Error).message);
+    }
+    await logActivity(
+      context.supabase,
+      context.userId,
+      "routine.assignments.updated",
+      "routine",
+      data.routineId,
+      `Updated assignments (${data.mode})`,
+      { mode: data.mode, count: data.studentIds.length },
+    );
+    return { ok: true };
+  });
+
+/** Admin — list students assigned to a routine, with progress %. */
+export const adminListRoutineAssignments = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator(validate(listAssignmentsSchema))
+  .handler(async ({ context, data }) => {
+    await assertPermission(context.supabase, context.userId, PERM, "routine.assignments.list", {
+      routineId: data.routineId,
+    });
+    const from = (data.page - 1) * data.pageSize;
+    const to = from + data.pageSize - 1;
+    let q = asAny(context.supabase)
+      .from("routine_assignments")
+      .select("id,student_id,status,created_at,updated_at,assigned_by", { count: "exact" })
+      .eq("routine_id", data.routineId)
+      .order("created_at", { ascending: false })
+      .range(from, to);
+    if (data.status !== "all") q = q.eq("status", data.status);
+    const { data: rows, error, count } = await q;
+    if (error) {
+      if (isMissingTable(error))
+        return { rows: [], count: 0, page: data.page, pageSize: data.pageSize, fallback: true };
+      throw new Error(error.message);
+    }
+    const ids = (rows ?? []).map((r: any) => r.student_id as string);
+    let profileMap: Record<string, { displayName: string | null; email: string | null; level: string | null }> = {};
+    if (ids.length > 0) {
+      const { data: profiles } = await asAny(context.supabase)
+        .from("profiles")
+        .select("id,display_name,email,level")
+        .in("id", ids);
+      profileMap = Object.fromEntries(
+        (profiles ?? []).map((p: any) => [
+          p.id,
+          {
+            displayName: p.display_name ?? null,
+            email: p.email ?? null,
+            level: p.level ?? null,
+          },
+        ]),
+      );
+    }
+    // Aggregate progress from routine_daily_progress.
+    let progressMap: Record<string, { studyMinutes: number; mcqsSolved: number; days: number }> = {};
+    if (ids.length > 0) {
+      try {
+        const { data: prog } = await asAny(context.supabase)
+          .from("routine_daily_progress")
+          .select("user_id,study_minutes,mcqs_solved")
+          .eq("routine_id", data.routineId)
+          .in("user_id", ids);
+        for (const p of prog ?? []) {
+          const uid = p.user_id as string;
+          const cur = progressMap[uid] ?? { studyMinutes: 0, mcqsSolved: 0, days: 0 };
+          cur.studyMinutes += Number(p.study_minutes ?? 0);
+          cur.mcqsSolved += Number(p.mcqs_solved ?? 0);
+          cur.days += 1;
+          progressMap[uid] = cur;
+        }
+      } catch (e) {
+        if (!isMissingTable(e)) throw e;
+      }
+    }
+    let targetStudy = 0;
+    let targetMcq = 0;
+    try {
+      const { data: r } = await asAny(context.supabase)
+        .from("routines")
+        .select("study_target_minutes,mcq_target")
+        .eq("id", data.routineId)
+        .maybeSingle();
+      targetStudy = Number(r?.study_target_minutes ?? 0);
+      targetMcq = Number(r?.mcq_target ?? 0);
+    } catch {
+      /* noop */
+    }
+    const mapped = (rows ?? []).map((r: any) => {
+      const prof = profileMap[r.student_id] ?? { displayName: null, email: null, level: null };
+      const prog = progressMap[r.student_id] ?? { studyMinutes: 0, mcqsSolved: 0, days: 0 };
+      const denomStudy = targetStudy * Math.max(1, prog.days);
+      const denomMcq = targetMcq * Math.max(1, prog.days);
+      const studyPct = denomStudy > 0 ? Math.round((prog.studyMinutes / denomStudy) * 100) : 0;
+      const mcqPct = denomMcq > 0 ? Math.round((prog.mcqsSolved / denomMcq) * 100) : 0;
+      const completionPct = Math.min(100, Math.round((studyPct + mcqPct) / 2));
+      const searchable = (prof.displayName ?? "") + " " + (prof.email ?? "");
+      return {
+        id: r.id as string,
+        studentId: r.student_id as string,
+        displayName: prof.displayName,
+        email: prof.email,
+        level: prof.level,
+        status: r.status as "active" | "removed",
+        assignedAt: r.created_at as string,
+        studyMinutes: prog.studyMinutes,
+        mcqsSolved: prog.mcqsSolved,
+        completionPct,
+        _searchable: searchable.toLowerCase(),
+      };
+    });
+    const filtered = data.search
+      ? mapped.filter((m) => m._searchable.includes(data.search!.toLowerCase()))
+      : mapped;
+    return {
+      rows: filtered.map(({ _searchable: _s, ...r }) => r),
+      count: count ?? filtered.length,
+      page: data.page,
+      pageSize: data.pageSize,
+    };
+  });
+
+/** Admin — remove (soft) a single assignment. */
+export const adminRemoveRoutineAssignment = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator(validate(z.object({ assignmentId: uuid })))
+  .handler(async ({ context, data }) => {
+    await assertPermission(context.supabase, context.userId, PERM, "routine.assignments.remove", {
+      assignmentId: data.assignmentId,
+    });
+    const { error } = await asAny(context.supabase)
+      .from("routine_assignments")
+      .update({ status: "removed", updated_at: new Date().toISOString() })
+      .eq("id", data.assignmentId);
+    if (error) {
+      if (isMissingTable(error)) return { ok: true, fallback: true };
+      throw new Error(error.message);
+    }
+    return { ok: true };
   });

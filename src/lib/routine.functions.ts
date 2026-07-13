@@ -57,6 +57,7 @@ function mapRoutine(row: any): RoutineDTO {
       mcqCount: row.mcq_target ?? 0,
     },
     status: row.status ?? "active",
+    assignmentMode: row.assignment_mode ?? "all_students",
     createdBy: row.created_by ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at ?? row.created_at,
@@ -119,7 +120,14 @@ async function logActivity(
 
 // ---------------- endpoints ----------------
 
-/** List the routines currently assigned to the calling student. */
+/** List the routines currently assigned to the calling student.
+ *
+ * Visibility rules:
+ *   - routine.assignment_mode = 'all_students' AND scope matches profile.level
+ *   - routine.assignment_mode = 'selected_students' AND an active row exists
+ *     in routine_assignments for (routine_id, auth.uid()).
+ *   - Legacy rows with NULL assignment_mode are treated as 'all_students'.
+ */
 export const listMyRoutines = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }): Promise<PagedResult<RoutineDTO>> => {
@@ -134,11 +142,29 @@ export const listMyRoutines = createServerFn({ method: "GET" })
       if (isMissingTable(error)) return { rows: [], count: 0, page: 1, pageSize: 50, fallback: true };
       throw new Error(error.message);
     }
+    // Load this student's explicit active assignments once.
+    let assignedIds = new Set<string>();
+    try {
+      const { data: ra, error: raErr } = await asAny(supabase)
+        .from("routine_assignments")
+        .select("routine_id")
+        .eq("student_id", userId)
+        .eq("status", "active");
+      if (raErr && !isMissingTable(raErr)) throw new Error(raErr.message);
+      assignedIds = new Set((ra ?? []).map((r: any) => r.routine_id as string));
+    } catch (e) {
+      if (!isMissingTable(e)) throw e;
+    }
     const applicable: any[] = [];
     for (const row of data ?? []) {
       if (row.start_date && row.start_date > today) continue;
       if (row.end_date && row.end_date < today) continue;
-      if (await studentMatchesRoutine(supabase, userId, row)) applicable.push(row);
+      const mode = (row.assignment_mode as string | null) ?? "all_students";
+      if (mode === "selected_students") {
+        if (assignedIds.has(row.id)) applicable.push(row);
+      } else {
+        if (await studentMatchesRoutine(supabase, userId, row)) applicable.push(row);
+      }
     }
     const rows = applicable.map(mapRoutine);
     return { rows, count: rows.length, page: 1, pageSize: rows.length };

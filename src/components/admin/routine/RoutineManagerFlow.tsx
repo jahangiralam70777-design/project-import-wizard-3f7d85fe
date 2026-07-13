@@ -710,6 +710,9 @@ export function RoutineManagerFlow() {
   const [tab, setTab] = useState<"list" | "review" | "notifications">("list");
   const [createOpen, setCreateOpen] = useState(false);
   const [details, setDetails] = useState<RoutineRow | null>(null);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [historyId, setHistoryId] = useState<string | null>(null);
+  const [assignedTarget, setAssignedTarget] = useState<RoutineRow | null>(null);
   const [search, setSearch] = useState("");
   const [filterLevel, setFilterLevel] = useState("all");
   const [filterSubject, setFilterSubject] = useState("all");

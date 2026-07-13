@@ -1063,14 +1063,28 @@ export function RoutineManagerFlow() {
                         <td className="px-4 py-3">
                           <div className="flex justify-end gap-1">
                             <RowAction icon={Eye} label="Preview" onClick={() => setDetails(r)} />
-                            <RowAction icon={Pencil} label="Edit" />
-                            <RowAction icon={Copy} label="Duplicate" />
+                            <RowAction icon={Pencil} label="Edit" onClick={() => setEditId(r.id)} />
+                            <RowAction icon={Copy} label="Duplicate" onClick={() => runAction("Duplicate", () => duplicateFn({ data: { id: r.id } }))} />
                             <RowAction
                               icon={r.status === "active" ? ToggleRight : ToggleLeft}
                               label={r.status === "active" ? "Disable" : "Enable"}
+                              onClick={() => runAction(r.status === "active" ? "Disable" : "Enable", () => (r.status === "active" ? disableFn({ data: { id: r.id } }) : enableFn({ data: { id: r.id } })))}
                             />
-                            <RowAction icon={Archive} label="Archive" />
-                            <RowAction icon={Trash2} label="Delete" destructive />
+                            <RowAction icon={UsersRound} label="Assigned Students" onClick={() => setAssignedTarget(r)} />
+                            <RowAction icon={History} label="History" onClick={() => setHistoryId(r.id)} />
+                            {r.status === "archived" ? (
+                              <RowAction icon={ArchiveRestore} label="Restore" onClick={() => runAction("Restore", () => restoreFn({ data: { id: r.id } }))} />
+                            ) : (
+                              <RowAction icon={Archive} label="Archive" onClick={() => runAction("Archive", () => archiveFn({ data: { id: r.id } }))} />
+                            )}
+                            <ConfirmDialog
+                              trigger={<button type="button" title="Delete" aria-label="Delete" className={cn("grid h-8 w-8 place-items-center rounded-lg border border-border/60 bg-background text-muted-foreground transition-colors hover:border-destructive/50 hover:bg-destructive/10 hover:text-destructive")}><Trash2 className="h-3.5 w-3.5" /></button>}
+                              title="Delete routine?"
+                              description={`This permanently deletes "${r.name}" and its assignments. This cannot be undone.`}
+                              confirmLabel="Delete"
+                              variant="destructive"
+                              onConfirm={() => runAction("Delete", () => deleteFn({ data: { id: r.id } }))}
+                            />
                           </div>
                         </td>
                       </tr>

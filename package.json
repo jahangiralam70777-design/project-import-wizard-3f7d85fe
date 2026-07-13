@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "build": "NITRO_PRESET=node-server vite build",
-    "build:dev": "vite build --mode development",
-    "build:node": "NITRO_PRESET=node-server vite build",
+    "build": "NODE_OPTIONS=--max-old-space-size=8192 NITRO_PRESET=node-server vite build",
+    "build:dev": "NODE_OPTIONS=--max-old-space-size=8192 vite build --mode development",
+    "build:node": "NODE_OPTIONS=--max-old-space-size=8192 NITRO_PRESET=node-server vite build",
     "preview": "vite preview",
     "start": "node .output/server/index.mjs",
     "lint": "eslint .",

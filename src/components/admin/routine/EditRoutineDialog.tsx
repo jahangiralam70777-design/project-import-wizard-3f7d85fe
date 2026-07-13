@@ -297,11 +297,7 @@ export function EditRoutineDialog({
                 </label>
               </RadioGroup>
               {assignmentMode === "selected_students" && (
-                <StudentPicker
-                  value={dedupedStudentIds}
-                  onChange={setStudentIds}
-                  levelFilter={level || undefined}
-                />
+                <StudentPicker value={dedupedStudentIds} onChange={setStudentIds} />
               )}
             </section>
           </div>

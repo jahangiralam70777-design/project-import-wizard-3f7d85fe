@@ -549,11 +549,7 @@ function CreateRoutineDialog({
               </label>
             </RadioGroup>
             {assignmentMode === "selected_students" && (
-              <StudentPicker
-                value={studentIds}
-                onChange={setStudentIds}
-                levelFilter={level || undefined}
-              />
+              <StudentPicker value={studentIds} onChange={setStudentIds} />
             )}
           </section>
         </div>

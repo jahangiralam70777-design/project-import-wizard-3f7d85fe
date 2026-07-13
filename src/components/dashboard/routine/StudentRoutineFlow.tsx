@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
 import {
   CalendarClock,
   Target,
@@ -16,6 +18,7 @@ import {
   CalendarDays,
   Sparkles,
   Percent,
+  Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +30,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { listMyRoutines, getTodayProgress } from "@/lib/routine.functions";
+
 
 function CircularProgress({
   value,
@@ -373,24 +378,55 @@ function ReportsSection() {
 export function StudentRoutineFlow() {
   const [tab, setTab] = useState<"today" | "calendar" | "reports" | "achievements">("today");
 
-  // No backend wired — awaiting API. UI is fully ready for integration.
-  const loading = false;
-  const hasRoutine = false;
-  const today = useMemo(
-    () => ({
-      status: "not_started" as const,
-      studyGoal: 0,
-      mcqGoal: 0,
-      completedMcqs: 0,
-      completedStudy: 0,
-      remainingStudy: 0,
-      remainingMcqs: 0,
-      studyPct: 0,
-      mcqPct: 0,
-      overallPct: 0,
-    }),
-    [],
-  );
+  const listFn = useServerFn(listMyRoutines);
+  const progressFn = useServerFn(getTodayProgress);
+
+  const routinesQ = useQuery({
+    queryKey: ["my-routines"],
+    queryFn: () => listFn(),
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+  });
+
+  const activeRoutine = routinesQ.data?.rows?.[0] ?? null;
+
+  const progressQ = useQuery({
+    queryKey: ["routine-today-progress", activeRoutine?.id ?? null],
+    queryFn: () => progressFn({ data: activeRoutine ? { routineId: activeRoutine.id } : {} }),
+    enabled: !!activeRoutine,
+    staleTime: 15_000,
+  });
+
+  const loading = routinesQ.isLoading;
+  const hasRoutine = !!activeRoutine;
+
+  const today = useMemo(() => {
+    const p = progressQ.data;
+    const studyGoalMin = p?.targetStudyMinutes ?? activeRoutine?.targets.studyMinutes ?? 0;
+    const mcqGoal = p?.targetMcqCount ?? activeRoutine?.targets.mcqCount ?? 0;
+    const completedStudyMin = p?.studyMinutes ?? 0;
+    const completedMcqs = p?.mcqsSolved ?? 0;
+    const studyPct = p?.studyPct ?? 0;
+    const mcqPct = p?.mcqPct ?? 0;
+    const overallPct = p?.overallPct ?? 0;
+    const remainingStudyMin = Math.max(0, studyGoalMin - completedStudyMin);
+    const remainingMcqs = Math.max(0, mcqGoal - completedMcqs);
+    const status: "completed" | "in_progress" | "not_started" | "missed" =
+      overallPct >= 100 ? "completed" : overallPct > 0 ? "in_progress" : "not_started";
+    return {
+      status,
+      studyGoal: +(studyGoalMin / 60).toFixed(1),
+      mcqGoal,
+      completedMcqs,
+      completedStudy: +(completedStudyMin / 60).toFixed(1),
+      remainingStudy: +(remainingStudyMin / 60).toFixed(1),
+      remainingMcqs,
+      studyPct,
+      mcqPct,
+      overallPct,
+    };
+  }, [progressQ.data, activeRoutine]);
+
 
   return (
     <div className="space-y-5">
@@ -403,8 +439,23 @@ export function StudentRoutineFlow() {
             </span>
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Your daily study plan — targets, progress and streaks.
+            {activeRoutine
+              ? activeRoutine.name
+              : "Your daily study plan — targets, progress and streaks."}
           </p>
+          {activeRoutine && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <Badge variant="outline" className="gap-1">
+                <Layers className="h-3 w-3" /> {activeRoutine.scope.level}
+              </Badge>
+              {activeRoutine.activeDays.length > 0 && (
+                <Badge variant="outline" className="gap-1">
+                  <CalendarDays className="h-3 w-3" />
+                  {activeRoutine.activeDays.join(", ")}
+                </Badge>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <TodayStatusBadge status={today.status} />

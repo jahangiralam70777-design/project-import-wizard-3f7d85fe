@@ -210,6 +210,7 @@ export type RoutineDTO = {
   activeDays: DayKey[];
   targets: { studyMinutes: number; mcqCount: number };
   status: RoutineStatus;
+  assignmentMode: AssignmentMode;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;

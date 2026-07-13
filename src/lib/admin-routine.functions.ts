@@ -795,37 +795,78 @@ export const updateManualReviewSettings = createServerFn({ method: "POST" })
 
 // ---------------- Student roster & assignment management ----------------
 
-/** Admin — searchable list of active students for the assignment picker. */
+/** Admin — searchable list of active students for the assignment picker.
+ *
+ * Root-cause fix: the previous implementation selected `email` from
+ * `public.profiles`, but that column does not exist (email lives in
+ * `auth.users`). PostgREST rejected the whole query, the server function
+ * threw, and the picker rendered "No students match your search" for every
+ * admin regardless of search input. It also diverged from User Management,
+ * which merges `profiles` with `auth.users` via the service-role client.
+ * This rewrite mirrors User Management's source of truth so both surfaces
+ * always agree.
+ */
 export const adminListStudentsForAssignment = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .validator(validate(listStudentsSchema))
   .handler(async ({ context, data }) => {
     await assertPermission(context.supabase, context.userId, PERM, "routine.students.list");
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const sb = asAny(context.supabase);
+
+    // Load the full auth-user roster (id → email) via the admin API — same
+    // primitive User Management uses. Cached at module scope for a short
+    // TTL so back-to-back search keystrokes stay cheap.
+    const authUsers = await loadAuthUsersCached(supabaseAdmin);
+    const emailById = new Map<string, string | null>();
+    for (const u of authUsers) emailById.set(u.id, u.email);
+
+    const term = (data.search ?? "").trim();
+    let allowedIds: string[] | null = null;
+    if (term) {
+      const lower = term.toLowerCase();
+      const isEmailish = /@/.test(term);
+      const isUuidPrefix = /^[0-9a-f-]{6,}$/i.test(term);
+      if (isEmailish || isUuidPrefix) {
+        allowedIds = authUsers
+          .filter(
+            (u) =>
+              (u.email ?? "").toLowerCase().includes(lower) ||
+              u.id.toLowerCase().startsWith(lower),
+          )
+          .map((u) => u.id);
+        if (allowedIds.length === 0)
+          return { rows: [], count: 0, page: data.page, pageSize: data.pageSize };
+      }
+    }
+
     const from = (data.page - 1) * data.pageSize;
     const to = from + data.pageSize - 1;
-    let q = asAny(context.supabase)
+    let q = sb
       .from("profiles")
-      .select("id,display_name,email,level", { count: "exact" })
-      .order("display_name", { ascending: true })
+      .select("id,display_name,level,deleted_at", { count: "exact" })
+      .is("deleted_at", null)
+      .order("display_name", { ascending: true, nullsFirst: false })
       .range(from, to);
-    // Only non-deleted / non-banned when those columns exist.
-    q = q.is("deleted_at", null);
     if (data.level) q = q.eq("level", data.level);
-    if (data.search) {
-      const s = `%${data.search}%`;
-      q = q.or(`display_name.ilike.${s},email.ilike.${s}`);
+    if (allowedIds !== null) {
+      q = q.in("id", allowedIds);
+    } else if (term) {
+      q = q.ilike("display_name", `%${term}%`);
     }
+
     const { data: rows, error, count } = await q;
     if (error) {
       if (isMissingTable(error))
         return { rows: [], count: 0, page: data.page, pageSize: data.pageSize, fallback: true };
       throw new Error(error.message);
     }
+
     return {
       rows: (rows ?? []).map((r: any) => ({
         id: r.id as string,
         displayName: (r.display_name as string | null) ?? null,
-        email: (r.email as string | null) ?? null,
+        email: emailById.get(r.id) ?? null,
         level: (r.level as string | null) ?? null,
       })),
       count: count ?? 0,
@@ -833,6 +874,36 @@ export const adminListStudentsForAssignment = createServerFn({ method: "POST" })
       pageSize: data.pageSize,
     };
   });
+
+// ---- auth.users roster cache (module scope, short TTL) -----------------
+type AuthUserLite = { id: string; email: string | null; verified: boolean };
+let _authUsersCache: { at: number; rows: AuthUserLite[] } | null = null;
+const AUTH_USERS_TTL_MS = 30_000;
+async function loadAuthUsersCached(supabaseAdmin: any): Promise<AuthUserLite[]> {
+  const now = Date.now();
+  if (_authUsersCache && now - _authUsersCache.at < AUTH_USERS_TTL_MS) {
+    return _authUsersCache.rows;
+  }
+  const out: AuthUserLite[] = [];
+  const perPage = 1000;
+  const maxPages = 10;
+  for (let page = 1; page <= maxPages; page++) {
+    try {
+      const { data } = await supabaseAdmin.auth.admin.listUsers({ page, perPage });
+      const users: Array<{ id: string; email?: string | null; email_confirmed_at?: string | null }> =
+        data?.users ?? [];
+      if (!users.length) break;
+      for (const u of users) {
+        out.push({ id: u.id, email: u.email ?? null, verified: !!u.email_confirmed_at });
+      }
+      if (users.length < perPage) break;
+    } catch {
+      break;
+    }
+  }
+  _authUsersCache = { at: now, rows: out };
+  return out;
+}
 
 /** Admin — replace the assignment set for a routine. */
 export const adminSetRoutineAssignments = createServerFn({ method: "POST" })

@@ -729,7 +729,33 @@ export function RoutineManagerFlow() {
   );
 
   const listFn = useServerFn(adminListRoutines);
+  const enableFn = useServerFn(adminEnableRoutine);
+  const disableFn = useServerFn(adminDisableRoutine);
+  const archiveFn = useServerFn(adminArchiveRoutine);
+  const restoreFn = useServerFn(adminRestoreRoutine);
+  const deleteFn = useServerFn(adminDeleteRoutine);
+  const duplicateFn = useServerFn(adminDuplicateRoutine);
   const queryClient = useQueryClient();
+  const invalidateList = () => queryClient.invalidateQueries({ queryKey: ["admin-routines"] });
+  const runAction = async (label: string, fn: () => Promise<unknown>) => {
+    try {
+      await fn();
+      toast.success(`${label} succeeded.`);
+      invalidateList();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : `${label} failed`);
+    }
+  };
+  const exportCsv = (rows: RoutineRow[]) => {
+    const header = ["id","name","level","subject","chapter","studyHours","mcqTarget","activeDays","status","createdAt"];
+    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const body = rows.map((r) => [r.id, r.name, r.level, r.subject ?? "", r.chapter ?? "", r.studyTarget, r.mcqTarget, r.activeDays.join("|"), r.status, r.createdAt].map(esc).join(","));
+    const blob = new Blob([header.join(",") + "\n" + body.join("\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `routines-${new Date().toISOString().slice(0,10)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
   const listKey = useMemo(
     () => [
       "admin-routines",

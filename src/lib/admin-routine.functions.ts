@@ -216,7 +216,7 @@ export const adminCreateRoutine = createServerFn({ method: "POST" })
       subjectId: data.scope.subjectId ?? null,
       chapterId: data.scope.chapterId ?? null,
     });
-    const row = {
+    const row: Record<string, unknown> = {
       name: data.name,
       description: data.description ?? null,
       scope_level: data.scope.level,
@@ -228,6 +228,7 @@ export const adminCreateRoutine = createServerFn({ method: "POST" })
       study_target_minutes: data.targets.studyMinutes,
       mcq_target: data.targets.mcqCount,
       status: "active" as const,
+      assignment_mode: data.assignmentMode ?? "all_students",
       created_by: context.userId,
     };
     const { data: inserted, error } = await asAny(context.supabase)
@@ -239,6 +240,23 @@ export const adminCreateRoutine = createServerFn({ method: "POST" })
       if (isMissingTable(error)) return { ok: true, fallback: true, routine: null };
       throw new Error(error.message);
     }
+    // Persist explicit selections when in selected_students mode.
+    const routineId = inserted?.id as string | undefined;
+    const ids = Array.from(new Set(data.selectedStudentIds ?? []));
+    if (routineId && data.assignmentMode === "selected_students" && ids.length > 0) {
+      try {
+        await asAny(context.supabase).from("routine_assignments").insert(
+          ids.map((sid) => ({
+            routine_id: routineId,
+            student_id: sid,
+            assigned_by: context.userId,
+            status: "active",
+          })),
+        );
+      } catch (e) {
+        if (!isMissingTable(e)) throw e;
+      }
+    }
     await logActivity(
       context.supabase,
       context.userId,
@@ -246,13 +264,17 @@ export const adminCreateRoutine = createServerFn({ method: "POST" })
       "routine",
       inserted?.id ?? null,
       `Created routine '${data.name}'`,
-      { scope: data.scope },
+      { scope: data.scope, assignmentMode: data.assignmentMode, selectedCount: ids.length },
     );
-    const audience = await resolveAudience(context.supabase, {
-      level: data.scope.level,
-      subjectId: data.scope.subjectId ?? null,
-      chapterId: data.scope.chapterId ?? null,
-    });
+    // Notify: explicit selection uses ids directly; all_students uses scope match.
+    const audience =
+      data.assignmentMode === "selected_students"
+        ? ids
+        : await resolveAudience(context.supabase, {
+            level: data.scope.level,
+            subjectId: data.scope.subjectId ?? null,
+            chapterId: data.scope.chapterId ?? null,
+          });
     await enqueueNotifications(
       context.supabase,
       audience,

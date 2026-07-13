@@ -322,6 +322,8 @@ export const adminUpdateRoutine = createServerFn({ method: "POST" })
       patch.scope_subject_id = data.scope.subjectId ?? null;
       patch.scope_chapter_id = data.scope.chapterId ?? null;
     }
+    if (data.assignmentMode !== undefined) patch.assignment_mode = data.assignmentMode;
+
     const { error } = await asAny(context.supabase)
       .from("routines")
       .update(patch)
@@ -329,6 +331,31 @@ export const adminUpdateRoutine = createServerFn({ method: "POST" })
     if (error) {
       if (isMissingTable(error)) return { ok: true, fallback: true };
       throw new Error(error.message);
+    }
+    // If caller sent a new selected-student list, replace assignments for this routine.
+    if (
+      (data.assignmentMode === "selected_students" && Array.isArray(data.selectedStudentIds)) ||
+      (data.assignmentMode !== undefined && data.assignmentMode !== "selected_students")
+    ) {
+      try {
+        await asAny(context.supabase)
+          .from("routine_assignments")
+          .delete()
+          .eq("routine_id", data.id);
+        const ids = Array.from(new Set(data.selectedStudentIds ?? []));
+        if (data.assignmentMode === "selected_students" && ids.length > 0) {
+          await asAny(context.supabase).from("routine_assignments").insert(
+            ids.map((sid) => ({
+              routine_id: data.id,
+              student_id: sid,
+              assigned_by: context.userId,
+              status: "active",
+            })),
+          );
+        }
+      } catch (e) {
+        if (!isMissingTable(e)) throw e;
+      }
     }
     await logActivity(
       context.supabase,

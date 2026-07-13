@@ -9,6 +9,7 @@ import {
   Pencil,
   Copy,
   Archive,
+  ArchiveRestore,
   ToggleLeft,
   ToggleRight,
   Trash2,
@@ -23,6 +24,9 @@ import {
   ListChecks,
   ShieldCheck,
   Target,
+  History,
+  Download,
+  UsersRound,
 } from "lucide-react";
 import { AdminPageHeader } from "@/components/ui/admin-page-header";
 import { Button } from "@/components/ui/button";
@@ -41,6 +45,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Dialog,
   DialogContent,
@@ -56,9 +61,14 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
 import { Bell } from "lucide-react";
 import { RoutineNotificationSettings } from "./RoutineNotificationSettings";
+import { StudentPicker } from "./StudentPicker";
+import { EditRoutineDialog } from "./EditRoutineDialog";
+import { RoutineHistoryDialog } from "./RoutineHistoryDialog";
+import { AssignedStudentsDialog } from "./AssignedStudentsDialog";
 import {
   useAcademicLevels,
   useAcademicSubjects,
@@ -71,6 +81,12 @@ import {
   updateManualReviewSettings,
   adminCreateRoutine,
   adminListRoutines,
+  adminEnableRoutine,
+  adminDisableRoutine,
+  adminArchiveRoutine,
+  adminRestoreRoutine,
+  adminDeleteRoutine,
+  adminDuplicateRoutine,
 } from "@/lib/admin-routine.functions";
 import { toast } from "sonner";
 

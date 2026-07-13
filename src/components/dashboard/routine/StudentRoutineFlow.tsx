@@ -439,8 +439,23 @@ export function StudentRoutineFlow() {
             </span>
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Your daily study plan — targets, progress and streaks.
+            {activeRoutine
+              ? activeRoutine.name
+              : "Your daily study plan — targets, progress and streaks."}
           </p>
+          {activeRoutine && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <Badge variant="outline" className="gap-1">
+                <Layers className="h-3 w-3" /> {activeRoutine.scope.level}
+              </Badge>
+              {activeRoutine.activeDays.length > 0 && (
+                <Badge variant="outline" className="gap-1">
+                  <CalendarDays className="h-3 w-3" />
+                  {activeRoutine.activeDays.join(", ")}
+                </Badge>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <TodayStatusBadge status={today.status} />

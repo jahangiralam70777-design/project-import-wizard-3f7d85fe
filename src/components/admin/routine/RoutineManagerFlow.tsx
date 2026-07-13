@@ -848,6 +848,10 @@ export function RoutineManagerFlow() {
         ]}
         actions={
           <>
+            <Button variant="ghost" size="sm" onClick={() => exportCsv(routines)}>
+              <Download className="mr-1.5 h-4 w-4" />
+              Export CSV
+            </Button>
             <Button variant="secondary" size="sm" onClick={() => setTab("review")}>
               <ShieldCheck className="mr-1.5 h-4 w-4" />
               Review Submissions

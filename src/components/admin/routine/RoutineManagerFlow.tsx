@@ -1153,9 +1153,26 @@ export function RoutineManagerFlow() {
       <CreateRoutineDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onCreated={() => queryClient.invalidateQueries({ queryKey: ["admin-routines"] })}
+        onCreated={invalidateList}
       />
       <RoutineDetailsSheet routine={details} onOpenChange={(v) => !v && setDetails(null)} />
+      <EditRoutineDialog
+        routineId={editId}
+        open={!!editId}
+        onOpenChange={(v) => !v && setEditId(null)}
+        onSaved={invalidateList}
+      />
+      <RoutineHistoryDialog
+        routineId={historyId}
+        open={!!historyId}
+        onOpenChange={(v) => !v && setHistoryId(null)}
+      />
+      <AssignedStudentsDialog
+        routineId={assignedTarget?.id ?? null}
+        routineName={assignedTarget?.name ?? ""}
+        open={!!assignedTarget}
+        onOpenChange={(v) => !v && setAssignedTarget(null)}
+      />
     </div>
   );
 }

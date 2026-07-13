@@ -522,6 +522,40 @@ function CreateRoutineDialog({
               </div>
             </div>
           </section>
+
+          {/* Assignment */}
+          <section className="space-y-3">
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+              Student Assignment
+            </h3>
+            <RadioGroup
+              value={assignmentMode}
+              onValueChange={(v) => setAssignmentMode(v as "all_students" | "selected_students")}
+              className="grid gap-2 sm:grid-cols-2"
+            >
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border/60 p-3 hover:bg-muted/40">
+                <RadioGroupItem value="all_students" />
+                <div>
+                  <p className="text-sm font-medium">All Students</p>
+                  <p className="text-xs text-muted-foreground">Every student matching scope.</p>
+                </div>
+              </label>
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border/60 p-3 hover:bg-muted/40">
+                <RadioGroupItem value="selected_students" />
+                <div>
+                  <p className="text-sm font-medium">Selected Students</p>
+                  <p className="text-xs text-muted-foreground">Only students you pick.</p>
+                </div>
+              </label>
+            </RadioGroup>
+            {assignmentMode === "selected_students" && (
+              <StudentPicker
+                value={studentIds}
+                onChange={setStudentIds}
+                levelFilter={level || undefined}
+              />
+            )}
+          </section>
         </div>
 
         <DialogFooter className="mt-4">
@@ -548,6 +582,9 @@ function CreateRoutineDialog({
                     endDate: endDate || null,
                     activeDays: days as any,
                     targets: { studyMinutes, mcqCount },
+                    assignmentMode,
+                    selectedStudentIds:
+                      assignmentMode === "selected_students" ? studentIds : [],
                   },
                 });
                 if ((res as any)?.fallback) {

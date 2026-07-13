@@ -52,6 +52,7 @@ function mapRoutine(row: any): RoutineDTO {
       mcqCount: row.mcq_target ?? 0,
     },
     status: row.status ?? "active",
+    assignmentMode: row.assignment_mode ?? "all_students",
     createdBy: row.created_by ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at ?? row.created_at,

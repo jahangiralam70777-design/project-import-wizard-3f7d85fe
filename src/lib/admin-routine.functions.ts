@@ -417,7 +417,7 @@ export const adminRestoreRoutine = createServerFn({ method: "POST" })
   .validator(validate(z.object({ id: uuid })))
   .handler(async ({ context, data }) => {
     await assertPermission(context.supabase, context.userId, PERM, "routine.restore", { id: data.id });
-    return setRoutineStatus(context, data.id, "disabled", "routine.restored", "Restored routine");
+    return setRoutineStatus(context, data.id, "active", "routine.restored", "Restored routine");
   });
 
 export const adminDeleteRoutine = createServerFn({ method: "POST" })

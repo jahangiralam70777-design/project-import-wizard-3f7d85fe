@@ -61,6 +61,9 @@ export const activeDaysSchema = z
   .min(1, "Select at least one active day")
   .max(7);
 
+export const ASSIGNMENT_MODES = ["all_students", "selected_students"] as const;
+export type AssignmentMode = (typeof ASSIGNMENT_MODES)[number];
+
 export const routineCreateSchema = z.object({
   name: nonEmpty,
   description: optionalText,
@@ -69,11 +72,34 @@ export const routineCreateSchema = z.object({
   endDate: isoDate.optional().nullable(),
   activeDays: activeDaysSchema,
   targets: routineTargetsSchema,
+  assignmentMode: z.enum(ASSIGNMENT_MODES).default("all_students"),
+  selectedStudentIds: z.array(uuid).max(10_000).default([]),
 });
 
 export const routineUpdateSchema = routineCreateSchema
-  .partial({ scope: true, activeDays: true, targets: true })
+  .partial({ scope: true, activeDays: true, targets: true, assignmentMode: true, selectedStudentIds: true })
   .extend({ id: uuid });
+
+export const setAssignmentsSchema = z.object({
+  routineId: uuid,
+  mode: z.enum(ASSIGNMENT_MODES),
+  studentIds: z.array(uuid).max(10_000).default([]),
+});
+
+export const listStudentsSchema = z.object({
+  search: z.string().trim().max(200).optional(),
+  level: z.string().trim().max(100).optional(),
+  page: z.number().int().min(1).max(2000).default(1),
+  pageSize: z.number().int().min(1).max(200).default(50),
+});
+
+export const listAssignmentsSchema = z.object({
+  routineId: uuid,
+  search: z.string().trim().max(200).optional(),
+  status: z.enum(["active", "removed", "all"]).default("active"),
+  page: z.number().int().min(1).max(2000).default(1),
+  pageSize: z.number().int().min(1).max(100).default(20),
+});
 
 export const listFiltersSchema = z.object({
   search: z.string().trim().max(200).optional(),

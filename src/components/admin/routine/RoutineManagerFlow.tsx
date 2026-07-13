@@ -202,6 +202,11 @@ function CreateRoutineDialog({
   const [enabled, setEnabled] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
+  const [assignmentMode, setAssignmentMode] = useState<"all_students" | "selected_students">(
+    "all_students",
+  );
+  const [studentIds, setStudentIds] = useState<string[]>([]);
+
   const { data: levels = [], isLoading: levelsLoading } = useAcademicLevels();
   const { data: subjects = [], isLoading: subjectsLoading } = useAcademicSubjects(level || null);
   const { data: chapters = [], isLoading: chaptersLoading } = useAcademicChapters(subject || null);
@@ -210,8 +215,8 @@ function CreateRoutineDialog({
 
   const nameError = name.length > 0 && name.trim().length < 3;
   const canSubmit =
-    name.trim().length >= 3 && level.length > 0 && days.length > 0 && !submitting;
-
+    name.trim().length >= 3 && level.length > 0 && days.length > 0 && !submitting &&
+    (assignmentMode === "all_students" || studentIds.length > 0);
 
   function toggleDay(k: string) {
     setDays((d) => (d.includes(k) ? d.filter((x) => x !== k) : [...d, k]));
@@ -230,6 +235,8 @@ function CreateRoutineDialog({
     setDays([]);
     setMandatory(true);
     setEnabled(true);
+    setAssignmentMode("all_students");
+    setStudentIds([]);
   }
 
   return (
